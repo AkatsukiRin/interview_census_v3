@@ -77,8 +77,11 @@ public class Census {
                     regionCounts.forEach((age, count) ->
                         mergedCounts.merge(age, count, Long::sum)
                     );
+                } catch (InterruptedException e) {
+                    // Preserve interrupt status for proper thread pool shutdown
+                    Thread.currentThread().interrupt();
                 } catch (Exception e) {
-                    // Swallow exceptions from future.get()
+                    // Swallow other exceptions from future.get()
                 }
             }
 
