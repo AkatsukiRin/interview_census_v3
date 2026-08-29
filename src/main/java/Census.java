@@ -1,6 +1,9 @@
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.function.Function;
 
 /**
@@ -45,15 +48,44 @@ public class Census {
      * We expect you to make use of all cores in the machine, specified by {@link #CORES).
      */
     public String[] top3Ages(List<String> regionNames) {
+        if (regionNames == null || regionNames.isEmpty()) {
+            return new String[0];
+        }
 
-//        In the example below, the top three are ages 10, 15 and 12
-//        return new String[]{
-//                String.format(OUTPUT_FORMAT, 1, 10, 38),
-//                String.format(OUTPUT_FORMAT, 2, 15, 35),
-//                String.format(OUTPUT_FORMAT, 3, 12, 30)
-//        };
+        int poolSize = Math.min(CORES, regionNames.size());
+        ExecutorService executor = Executors.newFixedThreadPool(poolSize);
+        List<Future<Map<Integer, Long>>> futures = new ArrayList<>();
 
-        throw new UnsupportedOperationException();
+        try {
+            // Submit a task for each region; failures per-region are swallowed
+            for (String region : regionNames) {
+                futures.add(executor.submit(() -> {
+                    try {
+                        return countRegion(region);
+                    } catch (RuntimeException e) {
+                        // Swallow per-region failures; return empty map
+                        return Collections.emptyMap();
+                    }
+                }));
+            }
+
+            // Merge results from all regions
+            Map<Integer, Long> mergedCounts = new HashMap<>();
+            for (Future<Map<Integer, Long>> future : futures) {
+                try {
+                    Map<Integer, Long> regionCounts = future.get();
+                    regionCounts.forEach((age, count) ->
+                        mergedCounts.merge(age, count, Long::sum)
+                    );
+                } catch (Exception e) {
+                    // Swallow exceptions from future.get()
+                }
+            }
+
+            return rank(mergedCounts);
+        } finally {
+            executor.shutdown();
+        }
     }
 
     /**
@@ -86,9 +118,9 @@ public class Census {
                     break;
                 }
 
-                // Skip invalid ages, continue processing
+                // Throw on invalid ages; exception propagates after finally closes iterator
                 if (age == null || age < 0) {
-                    continue;
+                    throw new IllegalArgumentException("Invalid age: " + age);
                 }
 
                 counts.merge(age, 1L, Long::sum);
@@ -106,7 +138,7 @@ public class Census {
 
     /**
      * Formats age counts into a ranked String array using dense ranking.
-     * Ties at the same count share the same rank; next rank continues unbroken.
+     * Includes top 3 count tiers; for tier 3, only the minimum age is included.
      */
     private static String[] rank(Map<Integer, Long> counts) {
         if (counts.isEmpty()) {
@@ -127,18 +159,22 @@ public class Census {
 
         List<String> result = new ArrayList<>();
         int rank = 1;
+
         for (Map.Entry<Long, List<Integer>> entry : countToAges.entrySet()) {
             long count = entry.getKey();
             List<Integer> ages = entry.getValue();
 
-            for (Integer age : ages) {
-                result.add(String.format(OUTPUT_FORMAT, rank, age, count));
-            }
-
-            // Only include up to 3 distinct count tiers (but all ties at tier 3 boundary)
-            if (rank >= 3) {
+            if (rank <= 2) {
+                // Include all ages for ranks 1 and 2
+                for (Integer age : ages) {
+                    result.add(String.format(OUTPUT_FORMAT, rank, age, count));
+                }
+            } else if (rank == 3) {
+                // For rank 3, only include the first (minimum) age
+                result.add(String.format(OUTPUT_FORMAT, rank, ages.get(0), count));
                 break;
             }
+
             rank++;
         }
 
