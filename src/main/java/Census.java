@@ -1,6 +1,6 @@
 import java.io.Closeable;
-import java.util.Iterator;
-import java.util.List;
+import java.io.IOException;
+import java.util.*;
 import java.util.function.Function;
 
 /**
@@ -36,15 +36,7 @@ public class Census {
      * the 3 most common ages in the format specified by {@link #OUTPUT_FORMAT}.
      */
     public String[] top3Ages(String region) {
-
-//        In the example below, the top three are ages 10, 15 and 12
-//        return new String[]{
-//                String.format(OUTPUT_FORMAT, 1, 10, 38),
-//                String.format(OUTPUT_FORMAT, 2, 15, 35),
-//                String.format(OUTPUT_FORMAT, 3, 12, 30)
-//        };
-
-        throw new UnsupportedOperationException();
+        return rank(countRegion(region));
     }
 
     /**
@@ -62,6 +54,95 @@ public class Census {
 //        };
 
         throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Drains an iterator for a single region and counts age frequencies.
+     * Skips invalid/negative ages and ensures iterator is always closed.
+     */
+    private Map<Integer, Long> countRegion(String region) {
+        AgeInputIterator iterator = iteratorFactory.apply(region);
+        Map<Integer, Long> counts = new HashMap<>();
+
+        try {
+            while (true) {
+                boolean hasNext = false;
+                try {
+                    hasNext = iterator.hasNext();
+                } catch (RuntimeException e) {
+                    // Iterator broken, treat as end of data
+                    break;
+                }
+
+                if (!hasNext) {
+                    break;
+                }
+
+                Integer age = null;
+                try {
+                    age = iterator.next();
+                } catch (RuntimeException e) {
+                    // Iterator broken, treat as end of data
+                    break;
+                }
+
+                // Skip invalid ages, continue processing
+                if (age == null || age < 0) {
+                    continue;
+                }
+
+                counts.merge(age, 1L, Long::sum);
+            }
+        } finally {
+            try {
+                iterator.close();
+            } catch (IOException e) {
+                // Ignore close exceptions
+            }
+        }
+
+        return counts;
+    }
+
+    /**
+     * Formats age counts into a ranked String array using dense ranking.
+     * Ties at the same count share the same rank; next rank continues unbroken.
+     */
+    private static String[] rank(Map<Integer, Long> counts) {
+        if (counts.isEmpty()) {
+            return new String[0];
+        }
+
+        // Group ages by count, sort counts descending
+        Map<Long, List<Integer>> countToAges = new TreeMap<>(Collections.reverseOrder());
+        for (Map.Entry<Integer, Long> entry : counts.entrySet()) {
+            countToAges.computeIfAbsent(entry.getValue(), k -> new ArrayList<>())
+                    .add(entry.getKey());
+        }
+
+        // Sort ages within each count group in ascending order
+        for (List<Integer> ages : countToAges.values()) {
+            Collections.sort(ages);
+        }
+
+        List<String> result = new ArrayList<>();
+        int rank = 1;
+        for (Map.Entry<Long, List<Integer>> entry : countToAges.entrySet()) {
+            long count = entry.getKey();
+            List<Integer> ages = entry.getValue();
+
+            for (Integer age : ages) {
+                result.add(String.format(OUTPUT_FORMAT, rank, age, count));
+            }
+
+            // Only include up to 3 distinct count tiers (but all ties at tier 3 boundary)
+            if (rank >= 3) {
+                break;
+            }
+            rank++;
+        }
+
+        return result.toArray(new String[0]);
     }
 
 
